@@ -1,0 +1,7 @@
+{
+  "name": "agy-porter",
+  "version": "1.0.0",
+  "description": "Portable session, artifact, and customization import/export plugin for Antigravity CLI.",
+  "author": "Antigravity Team",
+  "homepage": "https://antigravity.google/docs/plugins/agy-porter"
+}
