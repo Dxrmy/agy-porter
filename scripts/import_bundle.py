@@ -178,29 +178,30 @@ def register_desktop_session(new_conv_id: str, title: str, preview: str, step_co
         con.commit()
         con.close()
 
-        # Clone template db schema into conversations/<new_conv_id>.db
-        conversations_dir = desktop_dir / "conversations"
-        conversations_dir.mkdir(parents=True, exist_ok=True)
-        template_dbs = [p for p in conversations_dir.glob("*.db") if p.name != f"{new_conv_id}.db"]
-        target_db = conversations_dir / f"{new_conv_id}.db"
-        if template_dbs and not target_db.exists():
-            tmpl = template_dbs[0]
-            con_src = sqlite3.connect(tmpl)
-            con_dst = sqlite3.connect(target_db)
-            cur_src = con_src.cursor()
-            cur_dst = con_dst.cursor()
-            tables = [t[0] for t in cur_src.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()]
-            for t in tables:
-                create_sql = cur_src.execute(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{t}';").fetchone()[0]
-                cur_dst.execute(f"DROP TABLE IF EXISTS {t};")
-                cur_dst.execute(create_sql)
-            cur_dst.execute(
-                "INSERT INTO trajectory_meta (trajectory_id, cascade_id, trajectory_type, source) VALUES (?, ?, 4, 1);",
-                (new_conv_id, new_conv_id),
-            )
-            con_dst.commit()
-            con_dst.close()
-            con_src.close()
+        # Clone template db schema into conversations/<new_conv_id>.db for both desktop and cli
+        for app_root in [desktop_dir, Path.home() / ".gemini" / "antigravity-cli"]:
+            conv_dir = app_root / "conversations"
+            conv_dir.mkdir(parents=True, exist_ok=True)
+            t_dbs = [p for p in conv_dir.glob("*.db") if p.name != f"{new_conv_id}.db"]
+            t_target = conv_dir / f"{new_conv_id}.db"
+            if t_dbs and not t_target.exists():
+                tmpl = t_dbs[0]
+                con_src = sqlite3.connect(tmpl)
+                con_dst = sqlite3.connect(t_target)
+                cur_src = con_src.cursor()
+                cur_dst = con_dst.cursor()
+                tables = [t[0] for t in cur_src.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()]
+                for t in tables:
+                    create_sql = cur_src.execute(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{t}';").fetchone()[0]
+                    cur_dst.execute(f"DROP TABLE IF EXISTS {t};")
+                    cur_dst.execute(create_sql)
+                cur_dst.execute(
+                    "INSERT INTO trajectory_meta (trajectory_id, cascade_id, trajectory_type, source) VALUES (?, ?, 4, 1);",
+                    (new_conv_id, new_conv_id),
+                )
+                con_dst.commit()
+                con_dst.close()
+                con_src.close()
 
         # Write annotation
         annotations_dir = desktop_dir / "annotations"
