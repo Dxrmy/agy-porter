@@ -123,9 +123,96 @@ def fork_bundle(
                     sub_path = arc_path[len("customizations/"):]
                     custom_dest = target_workspace / ".agents" / sub_path
                     custom_dest.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(src_file, custom_dest)
+        # Auto-register in Desktop App if available
+        first_prompt = "Imported Conversation"
+        transcript_file = dest_brain_dir / "transcript.jsonl"
+        if transcript_file.exists():
+            for line in transcript_file.read_text(encoding="utf-8", errors="replace").splitlines():
+                if line.strip():
+                    try:
+                        step_data = json.loads(line)
+                        content = step_data.get("content", "")
+                        if "<USER_REQUEST>" in content:
+                            raw_req = content.split("<USER_REQUEST>")[1].split("</USER_REQUEST>")[0].strip()
+                            first_prompt = raw_req.splitlines()[0][:80]
+                            break
+                        elif content:
+                            first_prompt = content.splitlines()[0][:80]
+                            break
+                    except Exception:
+                        pass
+        register_desktop_session(new_conv_id, first_prompt, first_prompt, manifest.turn_count)
 
     return new_conv_id, dest_brain_dir
+
+
+def register_desktop_session(new_conv_id: str, title: str, preview: str, step_count: int) -> None:
+    """Registers imported session into Antigravity Desktop App database and sidebar."""
+    desktop_dir = Path.home() / ".gemini" / "antigravity"
+    summaries_db = desktop_dir / "conversation_summaries.db"
+    if not summaries_db.exists():
+        return
+
+    try:
+        import sqlite3
+        from datetime import datetime, timezone
+
+        con = sqlite3.connect(summaries_db)
+        cur = con.cursor()
+        cur.execute("DELETE FROM conversation_summaries WHERE conversation_id=?", (new_conv_id,))
+        cur.execute("""
+            INSERT INTO conversation_summaries (
+                conversation_id, title, preview, step_count, last_modified_time,
+                workspace_uris, status, source, project_id, agent_name,
+                parent_conversation_id, nesting_depth, battle_id, winning_conversation_id,
+                not_fully_idle, killed, last_user_input_time, last_user_input_step_index,
+                app_data_dir, raw_summary, group_id
+            ) VALUES (
+                ?, ?, ?, ?, datetime('now'),
+                '', 'CASCADE_RUN_STATUS_IDLE', '', 'outside-of-project', '',
+                '', 0, '', '',
+                0, 0, datetime('now'), 0,
+                'antigravity', b'', ''
+            )
+        """, (new_conv_id, title, preview, step_count))
+        con.commit()
+        con.close()
+
+        # Clone template db schema into conversations/<new_conv_id>.db
+        conversations_dir = desktop_dir / "conversations"
+        conversations_dir.mkdir(parents=True, exist_ok=True)
+        template_dbs = [p for p in conversations_dir.glob("*.db") if p.name != f"{new_conv_id}.db"]
+        target_db = conversations_dir / f"{new_conv_id}.db"
+        if template_dbs and not target_db.exists():
+            tmpl = template_dbs[0]
+            con_src = sqlite3.connect(tmpl)
+            con_dst = sqlite3.connect(target_db)
+            cur_src = con_src.cursor()
+            cur_dst = con_dst.cursor()
+            tables = [t[0] for t in cur_src.execute("SELECT name FROM sqlite_master WHERE type='table';").fetchall()]
+            for t in tables:
+                create_sql = cur_src.execute(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{t}';").fetchone()[0]
+                cur_dst.execute(f"DROP TABLE IF EXISTS {t};")
+                cur_dst.execute(create_sql)
+            cur_dst.execute(
+                "INSERT INTO trajectory_meta (trajectory_id, cascade_id, trajectory_type, source) VALUES (?, ?, 4, 1);",
+                (new_conv_id, new_conv_id),
+            )
+            con_dst.commit()
+            con_dst.close()
+            con_src.close()
+
+        # Write annotation
+        annotations_dir = desktop_dir / "annotations"
+        annotations_dir.mkdir(parents=True, exist_ok=True)
+        now_ts = int(datetime.now(timezone.utc).timestamp())
+        clean_title = title.replace('"', '\\"')
+        (annotations_dir / f"{new_conv_id}.pbtxt").write_text(
+            f'title:"{clean_title}" last_user_view_time:{{seconds:{now_ts} nanos:0}}\n',
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
 
 
 def extract_customizations_only(
